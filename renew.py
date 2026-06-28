@@ -48,43 +48,41 @@ def send_telegram_notification(message, screenshot_path=None):
 
 async def check_and_solve_turnstile_safely(page, description=""):
     """
-    安全的人机验证处理：只有当精准锁定了 Cloudflare 的验证框元素并拿到有效坐标时，才进行点击。
-    绝不进行全屏中心等任何盲点操作。
+    配合 cfbypass 环境，应对 GitHub Actions 环境下机房 IP 触发的 Managed 强指引单选框。
+    动态提取 iframe 坐标，实现不盲目的精准物理对位点击。
     """
     print(f"🔄 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
     
-    cf_selectors = [
-        "iframe[src*='challenges.cloudflare.com']",
-        "#turnstileContainer",
-        "#cf-challenge-slot",
-        "#renewModal .confirmation-modal-content"
-    ]
+    iframe_selector = "iframe[src*='challenges.cloudflare.com']"
     
     try:
-        for selector in cf_selectors:
-            element = page.locator(selector).first
-            # 只有当元素确实可见时才处理
-            if await element.is_visible(timeout=2000):
-                print(f"⚠️ 现场精准发现安全拦截元素: {selector}，正在尝试获取其几何坐标...")
-                box = await element.bounding_box()
-                if box:
-                    # 严格根据元素实际渲染的位置计算中心点
-                    click_x = box["x"] + (box["width"] / 2)
-                    click_y = box["y"] + (box["height"] / 2)
-                    
-                    if "renewModal" in selector:
-                        click_y = box["y"] + (box["height"] * 0.62)
-                        
-                    print(f"🎯 正在向元素中心坐标 [{click_x:.1f}, {click_y:.1f}] 发起精准点击...")
-                    await page.mouse.move(click_x, click_y)
-                    await page.mouse.down()
-                    await asyncio.sleep(0.1)
-                    await page.mouse.up()
-                    print("⏳ 点击完成，等待 6 秒供验证状态同步...")
-                    await asyncio.sleep(6)
-                    return True
+        cf_iframe = page.locator(iframe_selector).first
+        if await cf_iframe.is_visible(timeout=4000):
+            print("⚠️ 现场发现未自动打勾的 Managed 托管验证框。正在提取其几何热区...")
+            
+            box = await cf_iframe.bounding_box()
+            if box:
+                # 依据真实的 Clerk 续期弹窗图片特征：
+                # 那个需要人手去勾选的方块，精准位于整个 iframe 容器左侧 20%~25% 的区间，垂直居中。
+                click_x = box["x"] + (box["width"] * 0.22)
+                click_y = box["y"] + (box["height"] / 2)
+                
+                print(f"🎯 坐标解析成功！正向人机复选框实坐标 [{click_x:.1f}, {click_y:.1f}] 发起合规物理点击...")
+                
+                # 模拟真人移动并敲击
+                await page.mouse.move(click_x, click_y)
+                await asyncio.sleep(0.1)
+                await page.mouse.down()
+                await asyncio.sleep(0.15)
+                await page.mouse.up()
+                
+                print("⏳ 精准点击交互完成，留出 8 秒等待绿勾转完和后台接口下发凭证...")
+                await asyncio.sleep(8)
+                return True
+            else:
+                print("❌ 无法获取到验证码 iframe 的边界视口数据。")
     except Exception as e:
-        print(f"ℹ️ 扫描已知验证框时跳过: {e}")
+        print(f"ℹ️ 精准扫描或穿透验证框时发生跳过: {e}")
     return False
 
 
@@ -130,7 +128,7 @@ async def run_automation():
                 await solver.context.add_cookies(cookies_list)
                 print("✅ 凭证数据成功同步至隔离上下文空间。")
                 
-                # 免登录跳转：同步修改为 domcontentloaded 增强抗超时能力
+                # 免登录跳转
                 await page.goto("https://dash.zampto.net/server?id=6932", wait_until="domcontentloaded")
                 await asyncio.sleep(3)
                 
@@ -152,7 +150,7 @@ async def run_automation():
             await page.goto(LOGIN_URL, wait_until="domcontentloaded")
             await asyncio.sleep(4)
 
-            # 如果初次进入发现被拦截或者加载异常，原地重刷页面，靠网络和WARP自身的切换来冲破风控，绝不盲点
+            # 如果初次进入发现被拦截或者加载异常，原地重刷页面
             content_before = await page.content()
             if "verify you are human" in content_before.lower() or "clerk" not in content_before.lower():
                 print("⚠️ 监测到页面存在初次 CF 拦截或渲染不全，正在启动抗风控二次强制冲刷...")
@@ -167,20 +165,17 @@ async def run_automation():
             await check_and_solve_turnstile_safely(page, "刚进入登录页")
 
             print("输入 Email...")
-            # 精准绑定 Email 输入框
             email_input = page.locator('input[name="identifier"]').first
             try:
                 await email_input.wait_for(state="visible", timeout=15000)
             except Exception as e:
                 print("🚨 输入框超时未显现，尝试检测现场是否有明确的验证元素阻挡...")
                 await check_and_solve_turnstile_safely(page, "输入框未显现时的常规探测")
-                # 再次等待，若仍没有则直接抛出异常，不再执行任何无谓的盲点
                 await email_input.wait_for(state="visible", timeout=5000)
 
             await email_input.fill(EMAIL)
 
             print("点击真实登录提交按钮...")
-            # 精准排他性定位：只匹配带有 type="submit" 属性的真实表单按钮，彻底绝缘 type="button" 的 Google 第三方按钮
             login_btn_selectors = [
                 'button[name="submit"][type="submit"]',
                 'form button[type="submit"]:has-text("登录")',
@@ -223,7 +218,6 @@ async def run_automation():
             await asyncio.sleep(5)
             
             print("正在跨越主页，直接强行访问目标服务器页面...")
-            # 💡 核心修复点：将等待标准降级为 domcontentloaded。DOM结构好就立即放行，避免被残余的网络请求拖到30秒超时挂掉。
             await page.goto("https://dash.zampto.net/server?id=6932", wait_until="domcontentloaded")
 
         print("已成功切入服务器管理页面，缓冲 5 秒等待页面后台 JS 渲染完毕...")
@@ -237,7 +231,7 @@ async def run_automation():
         except:
             pass
 
-        # 根据你提供的 HTML，用最具排他性的选择器精确定位并点击真正的 Renew Server 按钮
+        # 定位真正的 Renew Server 按钮
         print("开始定位特定的 Renew Server 按钮...")
         renew_selectors = [
             'a[onclick*="handleServerRenewal(event, 6932)"]',
@@ -264,8 +258,8 @@ async def run_automation():
         print("点击最外层的 Renew Server 按钮，唤起安全验证弹窗...")
         await renew_link.click()
         await asyncio.sleep(3.0) 
-        
-        # 处理续期弹窗中明确可见的 Turnstile 人机验证框
+
+        # 🔗 精准测算目标坐标并切入点击
         await check_and_solve_turnstile_safely(page, "点击 Renew 按钮弹出安全验证后")
 
         # 4. 稍作等待让续期操作在验证通过后有充足时间完成
