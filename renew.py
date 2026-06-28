@@ -46,9 +46,10 @@ def send_telegram_notification(message, screenshot_path=None):
         print(f"发送 TG 通知失败: {e}")
 
 
-async def check_and_solve_turnstile(page, description=""):
+async def check_and_solve_turnstile_safely(page, description=""):
     """
-    针对 Closed Shadow DOM 以及各种静态、动态拦截框的高级物理穿透守卫
+    安全的人机验证处理：只有当精准锁定了 Cloudflare 的验证框元素并拿到有效坐标时，才进行点击。
+    绝不进行全屏中心等任何盲点操作。
     """
     print(f"🔄 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
     
@@ -56,45 +57,34 @@ async def check_and_solve_turnstile(page, description=""):
         "iframe[src*='challenges.cloudflare.com']",
         "#turnstileContainer",
         "#cf-challenge-slot",
-        "#renewModal .confirmation-modal-content",
-        "div:has-text('Verify you are human')"
+        "#renewModal .confirmation-modal-content"
     ]
     
     try:
         for selector in cf_selectors:
             element = page.locator(selector).first
+            # 只有当元素确实可见时才处理
             if await element.is_visible(timeout=2000):
-                print(f"⚠️ 现场发现拦截元素: {selector}，开始进行物理定位...")
+                print(f"⚠️ 现场精准发现安全拦截元素: {selector}，正在尝试获取其几何坐标...")
                 box = await element.bounding_box()
                 if box:
+                    # 严格根据元素实际渲染的位置计算中心点
                     click_x = box["x"] + (box["width"] / 2)
                     click_y = box["y"] + (box["height"] / 2)
                     
                     if "renewModal" in selector:
                         click_y = box["y"] + (box["height"] * 0.62)
                         
-                    print(f"🎯 正在向目标坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理敲击...")
+                    print(f"🎯 正在向元素中心坐标 [{click_x:.1f}, {click_y:.1f}] 发起精准点击...")
                     await page.mouse.move(click_x, click_y)
                     await page.mouse.down()
                     await asyncio.sleep(0.1)
                     await page.mouse.up()
-                    print("⏳ 物理点击完成，等待 6 秒同步状态...")
+                    print("⏳ 点击完成，等待 6 秒供验证状态同步...")
                     await asyncio.sleep(6)
                     return True
     except Exception as e:
         print(f"ℹ️ 扫描已知验证框时跳过: {e}")
-        
-    try:
-        content = await page.content()
-        if "captcha" in content.lower() or "verify you are human" in content.lower():
-            print("🚨 页面文字触发风控警报，进行视口中心物理轰击...")
-            viewport = page.viewport_size
-            if viewport:
-                await page.mouse.click(viewport["width"] / 2, viewport["height"] / 2)
-                await asyncio.sleep(6)
-                return True
-    except:
-        pass
     return False
 
 
@@ -122,7 +112,7 @@ async def run_automation():
         if not page:
             raise Exception("未能成功通过 solver 获取到 Playwright 页面实例。")
 
-        # 彻底抹除自动化指纹特征
+        # 抹除自动化指纹特征
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         """)
@@ -144,7 +134,7 @@ async def run_automation():
                     print("🎉 完美！使用 Cookies 成功跳过全部登录质询，已直接进入目标页！")
                     has_logged_in = True
                 else:
-                    print("⚠️ 注入的 Cookies 似乎已失效，系统已自动将其踢回，降级准备执行账号密码登录流程...")
+                    print("⚠️ 注入的 Cookies 似乎已失效，将降级准备执行账号密码登录流程...")
             except Exception as cookie_err:
                 print(f"❌ 尝试解析或注入 Cookie 时发生异常，将自动切回备用方案: {cookie_err}")
 
@@ -154,35 +144,39 @@ async def run_automation():
                 raise Exception("未注入有效的 Cookie 且缺少常规 EMAIL/PASSWORD 环境变量，脚本终止。")
 
             print("正在强制导航至传统登录网关...")
-            await page.goto(
-                "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
-                wait_until="domcontentloaded"
-            )
-            await asyncio.sleep(5)
+            LOGIN_URL = "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl"
+            await page.goto(LOGIN_URL, wait_until="domcontentloaded")
+            await asyncio.sleep(4)
+
+            # 如果初次进入发现被拦截或者加载异常，原地重刷页面，靠网络和WARP自身的切换来冲破风控，绝不盲点
+            content_before = await page.content()
+            if "verify you are human" in content_before.lower() or "clerk" not in content_before.lower():
+                print("⚠️ 监测到页面存在初次 CF 拦截或渲染不全，正在启动抗风控二次强制冲刷...")
+                await page.goto(LOGIN_URL, wait_until="networkidle")
+                await asyncio.sleep(4)
 
             print("📸 正在截取【初始登录页面】视图以供分析...")
             await page.screenshot(path=DEBUG_LOGIN_PATH)
             send_telegram_notification("🔍 调试通知：这是输入 EMAIL 前的初始登录页面截图", DEBUG_LOGIN_PATH)
 
-            await check_and_solve_turnstile(page, "刚进入登录页")
+            # 仅在检测到有明确坐标的验证框时才进行点击
+            await check_and_solve_turnstile_safely(page, "刚进入登录页")
 
             print("输入 Email...")
-            email_input = page.locator('form input[name="identifier"], input[type="email"]').first
+            # 精准绑定 Email 输入框
+            email_input = page.locator('input[name="identifier"]').first
             try:
-                await email_input.wait_for(state="visible", timeout=8000)
+                await email_input.wait_for(state="visible", timeout=15000)
             except Exception as e:
-                print("🚨 输入框未显现（可能被 Google 强认证挡住），尝试物理破盾...")
-                did_solve = await check_and_solve_turnstile(page, "找不到输入框时的紧急状态")
-                if did_solve:
-                    await email_input.wait_for(state="visible", timeout=10000)
-                else:
-                    raise Exception("页面打不开或卡死在第三方风控层，请优先配置 ZAMPTO_COOKIES 免登录。")
+                print("🚨 输入框超时未显现，尝试检测现场是否有明确的验证元素阻挡...")
+                await check_and_solve_turnstile_safely(page, "输入框未显现时的常规探测")
+                # 再次等待，若仍没有则直接抛出异常，不再执行任何无谓的盲点
+                await email_input.wait_for(state="visible", timeout=5000)
 
             await email_input.fill(EMAIL)
 
-            # 💡 核心锁定点：精准排他性定位真实登录提交按钮
-            # 优先匹配带有 name="submit" 且包含特定文字的按钮，绝对隔离并排除 type="button" 的 Google 社交组件
-            print("点击真实登录提交按钮（排除 Google 干扰项）...")
+            print("点击真实登录提交按钮...")
+            # 精准排他性定位：只匹配带有 type="submit" 属性的真实表单按钮，彻底绝缘 type="button" 的 Google 第三方按钮
             login_btn_selectors = [
                 'button[name="submit"][type="submit"]',
                 'form button[type="submit"]:has-text("登录")',
@@ -202,7 +196,7 @@ async def run_automation():
                     continue
                     
             if not real_login_btn:
-                raise Exception("无法在页面上准确定位到真实的【登录】提交按钮。")
+                raise Exception("无法在页面上准确定位到真实的【登录】表单提交按钮。")
 
             await real_login_btn.click()
             await asyncio.sleep(4)
@@ -211,15 +205,14 @@ async def run_automation():
             await page.screenshot(path=DEBUG_LOGIN_PATH)
             send_telegram_notification("🔍 调试通知：这是点击提交 EMAIL 后的状态截图", DEBUG_LOGIN_PATH)
 
-            await check_and_solve_turnstile(page, "提交 Email 后")
+            await check_and_solve_turnstile_safely(page, "提交 Email 后")
 
             print("等待密码页面加载并输入密码...")
-            password_input = page.locator('form input[name="password"], input[type="password"]').first
+            password_input = page.locator('input[name="password"]').first
             await password_input.wait_for(state="visible", timeout=15000)
             await password_input.fill(PASSWORD)
 
             print("点击继续提交按钮...")
-            # 密码界面同样严格使用带有 type="submit" 属性的表单按钮
             continue_btn = page.locator('form button[type="submit"]').first
             await continue_btn.click()
 
@@ -232,7 +225,6 @@ async def run_automation():
         await asyncio.sleep(5)
 
         # 清理干扰广告元素
-        print("清理干扰广告元素...")
         try:
             await page.evaluate("""() => {
                 document.querySelectorAll('ins.adsbygoogle, iframe[id*="google"]').forEach(el => el.remove());
@@ -240,7 +232,7 @@ async def run_automation():
         except:
             pass
 
-        # 3. 多重组合拳选择器定位 Renew 按钮
+        # 3. 定位 Renew 按钮
         print("开始定位 Renew 按钮...")
         renew_selectors = [
             'a[onclick*="handleServerRenewal"]',
@@ -269,8 +261,8 @@ async def run_automation():
         await renew_link.click()
         await asyncio.sleep(3.0) 
         
-        # 🔗 核心突破点：处理续期弹窗中被 Closed Shadow DOM 隐藏的 Turnstile 人机验证框
-        await check_and_solve_turnstile(page, "点击 Renew 按钮弹出安全验证后")
+        # 处理续期弹窗中明确可见的 Turnstile 人机验证框
+        await check_and_solve_turnstile_safely(page, "点击 Renew 按钮弹出安全验证后")
 
         # 4. 稍作等待让续期操作在验证通过后有充足时间完成
         print("等待 8 秒让续期业务后台确认结果...")
