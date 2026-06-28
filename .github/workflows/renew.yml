@@ -9,7 +9,6 @@ jobs:
   renew:
     runs-on: ubuntu-latest
     # 使用 Playwright 官方提供的 Docker 容器环境
-    # 该镜像内部已完美内置了浏览器及其全部所需的系统依赖，彻底免去安装烦恼
     container:
       image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
 
@@ -22,12 +21,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 💡 注意：因为使用了 Docker 官方镜像，这里完全不需要、也千万不要再写 playwright install 命令了！
-
     - name: Setup Gost Proxy
       run: |
         # 👇👇👇 正在启动gost代理 👇👇👇                
-        wget -q https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
+        # 修复：改用容器自带的 curl -L -O 代替 wget
+        curl -sSL -O https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
         gunzip -f gost-linux-amd64-2.11.5.gz
         chmod +x gost-linux-amd64-2.11.5
         
