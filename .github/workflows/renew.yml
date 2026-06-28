@@ -7,19 +7,27 @@ on:
 
 jobs:
   renew:
-    runs-on: ubuntu-latest
-    # 使用 Playwright 官方提供的 Docker 容器环境
-    container:
-      image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+    runs-on: ubuntu-latest # 💡 剥离 container 隔离，直接利用宿主机环境，完美兼容 WARP 与 sudo
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        # 如果有 requirements.txt 则安装，否则单独安装基础库
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install playwright requests; fi
+
+    - name: Install Playwright Browsers
+      run: |
+        # 💡 因为去掉了官方容器，我们需要在此处手动下载 chromium 浏览器及其系统依赖
+        playwright install chromium --with-deps
 
     - name: 启用 WARP 网络
       uses: fscarmen/warp-on-actions@v1.3
@@ -51,6 +59,7 @@ jobs:
       env:
         ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
         ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
+        ZAMPTO_COOKIES: ${{ secrets.ZAMPTO_COOKIES }} # 💡 顺便为你注入了上一步提到的 Cookie 变量支持
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         PROXY: 127.0.0.1:1080
