@@ -4,6 +4,7 @@ import time
 import json
 import requests
 import platform
+import threading
 from pathlib import Path
 from seleniumbase import SB
 
@@ -16,6 +17,13 @@ ZAMPTO_COOKIES_JSON = os.environ.get("ZAMPTO_COOKIES")
 
 SCREENSHOT_PATH = "screenshot.png"
 DEBUG_LOGIN_PATH = "debug_login.png"
+
+
+def watchdog(timeout_seconds: int):
+    """看门狗逻辑：防止脚本无限制卡死，超时则暴力中断"""
+    time.sleep(timeout_seconds)
+    print(f"\n🚨 [WATCHDOG] 脚本执行超过 {timeout_seconds}s，触发防死锁机制，正在执行暴力中断...")
+    os._exit(0)
 
 
 def send_telegram_notification(message, screenshot_path=None):
@@ -65,13 +73,14 @@ def handle_turnstile_safely(sb, description=""):
 def run_automation():
     print("正在启动带有 SeleniumBase-UC 守护的全局高级自适应浏览器实例...")
     
-    # 保持与原有逻辑一致的 Headless 及反爬配置
+    # 针对机房无头环境优化的全套抗卡死启动参数
     opts = {
         "uc": True, 
         "test": True, 
         "locale": "zh", 
         "headed": False,
-        "timeout_multiplier": 0.5
+        "timeout_multiplier": 0.5,
+        "chromium_arg": "--no-sandbox,--disable-dev-shm-usage,--disable-gpu,--disable-software-rasterizer"
     }
 
     # 兼容 Linux 无头环境的虚拟显示支持
@@ -86,11 +95,13 @@ def run_automation():
         except Exception as e:
             print(f"[WARN] 挂载虚拟显示发生跳过 (可能已具备环境): {e}")
 
+    print("[INFO] 正在唤醒底层 Chromium 核心与 UC 隐身代理服务...")
     with SB(**opts) as sb:
         try:
             # 统一控制加载超时与 1920x1080 视口分辨率
             sb.driver.set_page_load_timeout(30)
             sb.driver.set_window_size(1920, 1080)
+            print("[INFO] 核心浏览器环境已完全就绪，开始执行业务流水。")
 
             has_logged_in = False
 
@@ -261,4 +272,8 @@ def run_automation():
 
 
 if __name__ == "__main__":
+    # 启动看门狗守护线程，限制总执行时长为 350 秒，防止 GitHub Actions 无限卡住
+    dog = threading.Thread(target=watchdog, args=(350,), daemon=True)
+    dog.start()
+    
     run_automation()
