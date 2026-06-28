@@ -19,9 +19,10 @@ EMAIL = os.environ.get("ZAMPTO_EMAIL")
 PASSWORD = os.environ.get("ZAMPTO_PASSWORD")
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
-ZAMPTO_COOKIES_JSON = os.environ.get("ZAMPTO_COOKIES") # 💡 建议新加的 Secret
+ZAMPTO_COOKIES_JSON = os.environ.get("ZAMPTO_COOKIES")
 
 SCREENSHOT_PATH = "screenshot.png"
+DEBUG_LOGIN_PATH = "debug_login.png"
 
 
 def send_telegram_notification(message, screenshot_path=None):
@@ -128,20 +129,17 @@ async def run_automation():
 
         has_logged_in = False
 
-        # 💡 核心优化策略：优先尝试 Cookie 注入免登录，彻底封杀 Google 拦截
+        # 优先尝试 Cookie 注入免登录
         if ZAMPTO_COOKIES_JSON:
             print("📦 发现配置了本地持久化 Cookies 凭证，正在尝试免登录直接切入...")
             try:
                 cookies_list = json.loads(ZAMPTO_COOKIES_JSON)
-                # 显式为主域和认证域同时注入 Cookie
                 await solver.context.add_cookies(cookies_list)
                 print("✅ 凭证数据成功同步至隔离上下文空间。")
                 
-                # 尝试直接去服务器页面测试 Cookie 是否有效
                 await page.goto("https://dash.zampto.net/server?id=6932", wait_until="networkidle")
                 await asyncio.sleep(3)
                 
-                # 检测是否由于 Cookie 失效或仍被拦截退回到登录页
                 if "sign-in" not in page.url and "google" not in page.url:
                     print("🎉 完美！使用 Cookies 成功跳过全部登录质询，已直接进入目标页！")
                     has_logged_in = True
@@ -150,7 +148,7 @@ async def run_automation():
             except Exception as cookie_err:
                 print(f"❌ 尝试解析或注入 Cookie 时发生异常，将自动切回备用方案: {cookie_err}")
 
-        # 备用方案：传统的账号密码登录流程（应对没有配置 Cookie 的情况）
+        # 备用方案：传统的账号密码登录流程
         if not has_logged_in:
             if not EMAIL or not PASSWORD:
                 raise Exception("未注入有效的 Cookie 且缺少常规 EMAIL/PASSWORD 环境变量，脚本终止。")
@@ -160,17 +158,22 @@ async def run_automation():
                 "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
                 wait_until="domcontentloaded"
             )
-            await asyncio.sleep(4)
+            await asyncio.sleep(5)
+
+            # 💡 调试加固 1：刚进入登录页面，输入前先截个图发出去，看看最初究竟显示的是什么
+            print("📸 正在截取【初始登录页面】视图以供分析...")
+            await page.screenshot(path=DEBUG_LOGIN_PATH)
+            send_telegram_notification("🔍 调试通知：这是输入 EMAIL 前的初始登录页面截图", DEBUG_LOGIN_PATH)
 
             await check_and_solve_turnstile(page, "刚进入登录页")
 
             print("输入 Email...")
-            email_input = page.locator('input[name="identifier"]')
+            # 强化选择器：精准定位表单内原生 identifier 输入框
+            email_input = page.locator('form input[name="identifier"], input[type="email"]').first
             try:
                 await email_input.wait_for(state="visible", timeout=8000)
             except Exception as e:
-                # 如果找不到，多半是出了 Google 或者别的强验证，尝试做最后一次突围点击
-                print("🚨 输入框未显现（可能被 Google 或拦截挡住），尝试物理破盾...")
+                print("🚨 输入框未显现（可能被 Google 强认证挡住），尝试物理破盾...")
                 did_solve = await check_and_solve_turnstile(page, "找不到输入框时的紧急状态")
                 if did_solve:
                     await email_input.wait_for(state="visible", timeout=10000)
@@ -180,19 +183,25 @@ async def run_automation():
             await email_input.fill(EMAIL)
 
             print("点击登录提交按钮...")
-            login_btn = page.locator('button[type="submit"]')
+            # 强化选择器：只点击表单内的提交按钮，绝不误触底部的 Google 登录等第三方按钮
+            login_btn = page.locator('form button[type="submit"], form button:has-text("Continue")').first
             await login_btn.click()
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
             
+            # 💡 调试加固 2：点击提交 Email 后，输入密码前再截个图，看看是不是在这一步跳到了 Google
+            print("📸 正在截取【提交 Email 后】的过渡页面视图...")
+            await page.screenshot(path=DEBUG_LOGIN_PATH)
+            send_telegram_notification("🔍 调试通知：这是点击提交 EMAIL 后的状态截图", DEBUG_LOGIN_PATH)
+
             await check_and_solve_turnstile(page, "提交 Email 后")
 
             print("等待密码页面加载并输入密码...")
-            password_input = page.locator('input[name="password"]')
+            password_input = page.locator('form input[name="password"], input[type="password"]').first
             await password_input.wait_for(state="visible", timeout=15000)
             await password_input.fill(PASSWORD)
 
             print("点击继续提交按钮...")
-            continue_btn = page.locator('button[type="submit"]')
+            continue_btn = page.locator('form button[type="submit"]').first
             await continue_btn.click()
 
             await asyncio.sleep(5)
