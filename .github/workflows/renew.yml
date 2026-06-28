@@ -56,5 +56,7 @@ jobs:
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         ZAMPTO_COOKIES: ${{ secrets.ZAMPTO_COOKIES }}
         ZAMPTO_ACCOUNT: ${{ secrets.ZAMPTO_ACCOUNT }}
+        HTTP_PROXY: http://127.0.0.1:1080
+        HTTPS_PROXY: http://127.0.0.1:1080
       run: |
         python renew.py
