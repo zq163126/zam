@@ -48,41 +48,51 @@ def send_telegram_notification(message, screenshot_path=None):
 
 async def check_and_solve_turnstile_safely(page, description=""):
     """
-    配合 cfbypass 环境，应对 GitHub Actions 环境下机房 IP 触发的 Managed 强指引单选框。
-    动态提取 iframe 坐标，实现不盲目的精准物理对位点击。
+    配合 cfbypass 环境。
+    增加显式日志输出，实时打印是否找到 CF 验证框元素以及计算出的绝对坐标。
     """
-    print(f"🔄 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
+    print(f"🔄 [检查开始] 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
     
     iframe_selector = "iframe[src*='challenges.cloudflare.com']"
     
     try:
         cf_iframe = page.locator(iframe_selector).first
-        if await cf_iframe.is_visible(timeout=4000):
-            print("⚠️ 现场发现未自动打勾的 Managed 托管验证框。正在提取其几何热区...")
+        is_visible = await cf_iframe.is_visible(timeout=4000)
+        
+        # 📢 显式输出是否找到了元素
+        if is_visible:
+            print(f"🔍 [元素探测] 成功：已在页面上找到 CF 验证框元素 ({iframe_selector})！")
+        else:
+            print(f"🔍 [元素探测] 未发现：页面上当前没有显示 CF 验证框 ({iframe_selector})。")
+            return False
+
+        print("⚠️ 正在尝试提取该验证框的几何空间数据...")
+        box = await cf_iframe.bounding_box()
+        
+        if box:
+            print(f"📊 [坐标数据] 验证框实际位置 -> X: {box['x']:.1f}, Y: {box['y']:.1f}, 宽度: {box['width']:.1f}, 高度: {box['height']:.1f}")
             
-            box = await cf_iframe.bounding_box()
-            if box:
-                # 依据真实的 Clerk 续期弹窗图片特征：
-                # 那个需要人手去勾选的方块，精准位于整个 iframe 容器左侧 20%~25% 的区间，垂直居中。
-                click_x = box["x"] + (box["width"] * 0.22)
-                click_y = box["y"] + (box["height"] / 2)
-                
-                print(f"🎯 坐标解析成功！正向人机复选框实坐标 [{click_x:.1f}, {click_y:.1f}] 发起合规物理点击...")
-                
-                # 模拟真人移动并敲击
-                await page.mouse.move(click_x, click_y)
-                await asyncio.sleep(0.1)
-                await page.mouse.down()
-                await asyncio.sleep(0.15)
-                await page.mouse.up()
-                
-                print("⏳ 精准点击交互完成，留出 8 秒等待绿勾转完和后台接口下发凭证...")
-                await asyncio.sleep(8)
-                return True
-            else:
-                print("❌ 无法获取到验证码 iframe 的边界视口数据。")
+            # 依据真实的 Clerk 续期弹窗图片特征计算点击热区
+            click_x = box["x"] + (box["width"] * 0.22)
+            click_y = box["y"] + (box["height"] / 2)
+            
+            print(f"🎯 [执行动作] 测算完成！正向人机复选框目标坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理点击...")
+            
+            # 模拟真人移动并敲击
+            await page.mouse.move(click_x, click_y)
+            await asyncio.sleep(0.1)
+            await page.mouse.down()
+            await asyncio.sleep(0.15)
+            await page.mouse.up()
+            
+            print("⏳ [点击完成] 精准点击交互已触发，留出 8 秒等待绿勾转完和后台接口下发凭证...")
+            await asyncio.sleep(8)
+            return True
+        else:
+            print("❌ [错误] 虽然找到了验证框元素，但无法获取到它的边界视口数据 (bounding_box 为空)。")
+            
     except Exception as e:
-        print(f"ℹ️ 精准扫描或穿透验证框时发生跳过: {e}")
+        print(f"ℹ️ [异常跳过] 扫描或处理验证框时发生非致命异常: {e}")
     return False
 
 
@@ -257,9 +267,9 @@ async def run_automation():
 
         print("点击最外层的 Renew Server 按钮，唤起安全验证弹窗...")
         await renew_link.click()
-        await asyncio.sleep(3.0) 
+        await asyncio.sleep(4.0)  # 轻微调大弹窗动画缓冲时间，确保 iframe 完全就绪
 
-        # 🔗 精准测算目标坐标并切入点击
+        # 🔗 精准日志测算并切入点击
         await check_and_solve_turnstile_safely(page, "点击 Renew 按钮弹出安全验证后")
 
         # 4. 稍作等待让续期操作在验证通过后有充足时间完成
