@@ -160,7 +160,6 @@ async def run_automation():
             )
             await asyncio.sleep(5)
 
-            # 💡 调试加固 1：刚进入登录页面，输入前先截个图发出去，看看最初究竟显示的是什么
             print("📸 正在截取【初始登录页面】视图以供分析...")
             await page.screenshot(path=DEBUG_LOGIN_PATH)
             send_telegram_notification("🔍 调试通知：这是输入 EMAIL 前的初始登录页面截图", DEBUG_LOGIN_PATH)
@@ -168,7 +167,6 @@ async def run_automation():
             await check_and_solve_turnstile(page, "刚进入登录页")
 
             print("输入 Email...")
-            # 强化选择器：精准定位表单内原生 identifier 输入框
             email_input = page.locator('form input[name="identifier"], input[type="email"]').first
             try:
                 await email_input.wait_for(state="visible", timeout=8000)
@@ -178,17 +176,37 @@ async def run_automation():
                 if did_solve:
                     await email_input.wait_for(state="visible", timeout=10000)
                 else:
-                    raise Exception("页面打不开或卡死在第三方/Google登录风控层，请优先配置 ZAMPTO_COOKIES 免登录。")
+                    raise Exception("页面打不开或卡死在第三方风控层，请优先配置 ZAMPTO_COOKIES 免登录。")
 
             await email_input.fill(EMAIL)
 
-            print("点击登录提交按钮...")
-            # 强化选择器：只点击表单内的提交按钮，绝不误触底部的 Google 登录等第三方按钮
-            login_btn = page.locator('form button[type="submit"], form button:has-text("Continue")').first
-            await login_btn.click()
+            # 💡 核心锁定点：精准排他性定位真实登录提交按钮
+            # 优先匹配带有 name="submit" 且包含特定文字的按钮，绝对隔离并排除 type="button" 的 Google 社交组件
+            print("点击真实登录提交按钮（排除 Google 干扰项）...")
+            login_btn_selectors = [
+                'button[name="submit"][type="submit"]',
+                'form button[type="submit"]:has-text("登录")',
+                'form button[type="submit"]:has-text("Continue")',
+                'button[type="submit"]'
+            ]
+            
+            real_login_btn = None
+            for selector in login_btn_selectors:
+                try:
+                    loc = page.locator(selector).first
+                    if await loc.is_visible(timeout=2000):
+                        real_login_btn = loc
+                        print(f"🎯 成功锁定登录按钮选择器: {selector}")
+                        break
+                except:
+                    continue
+                    
+            if not real_login_btn:
+                raise Exception("无法在页面上准确定位到真实的【登录】提交按钮。")
+
+            await real_login_btn.click()
             await asyncio.sleep(4)
             
-            # 💡 调试加固 2：点击提交 Email 后，输入密码前再截个图，看看是不是在这一步跳到了 Google
             print("📸 正在截取【提交 Email 后】的过渡页面视图...")
             await page.screenshot(path=DEBUG_LOGIN_PATH)
             send_telegram_notification("🔍 调试通知：这是点击提交 EMAIL 后的状态截图", DEBUG_LOGIN_PATH)
@@ -201,6 +219,7 @@ async def run_automation():
             await password_input.fill(PASSWORD)
 
             print("点击继续提交按钮...")
+            # 密码界面同样严格使用带有 type="submit" 属性的表单按钮
             continue_btn = page.locator('form button[type="submit"]').first
             await continue_btn.click()
 
