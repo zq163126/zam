@@ -7,7 +7,7 @@ on:
 
 jobs:
   renew:
-    runs-on: ubuntu-latest # 💡 剥离 container 隔离，直接利用宿主机环境，完美兼容 WARP 与 sudo
+    runs-on: ubuntu-latest # 使用最新宿主机环境
 
     steps:
     - name: Checkout repository
@@ -21,12 +21,12 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 如果有 requirements.txt 则安装，否则单独安装基础库
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install playwright requests; fi
+        # 💡 核心优化：直接安装较新版本的 playwright（例如 1.45.0+），完美原生兼容 Ubuntu 24.04 的新依赖链
+        pip install playwright==1.45.1 requests
 
     - name: Install Playwright Browsers
       run: |
-        # 💡 因为去掉了官方容器，我们需要在此处手动下载 chromium 浏览器及其系统依赖
+        # 升级后，此处的 --with-deps 会自动识别并精准安装 libasound2t64，不再报错
         playwright install chromium --with-deps
 
     - name: 启用 WARP 网络
@@ -59,7 +59,7 @@ jobs:
       env:
         ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
         ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
-        ZAMPTO_COOKIES: ${{ secrets.ZAMPTO_COOKIES }} # 💡 顺便为你注入了上一步提到的 Cookie 变量支持
+        ZAMPTO_COOKIES: ${{ secrets.ZAMPTO_COOKIES }}
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         PROXY: 127.0.0.1:1080
