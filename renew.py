@@ -2,6 +2,7 @@ import os
 import sys
 import asyncio
 import requests
+import json
 
 # 兼容处理 cfbypass.py 的各种放置方式
 try:
@@ -18,6 +19,7 @@ EMAIL = os.environ.get("ZAMPTO_EMAIL")
 PASSWORD = os.environ.get("ZAMPTO_PASSWORD")
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
+ZAMPTO_COOKIES_JSON = os.environ.get("ZAMPTO_COOKIES") # 💡 建议新加的 Secret
 
 SCREENSHOT_PATH = "screenshot.png"
 
@@ -45,8 +47,7 @@ def send_telegram_notification(message, screenshot_path=None):
 
 async def check_and_solve_turnstile(page, description=""):
     """
-    高级物理穿透守卫：不仅看选择器，如果页面包含了 Turnstile 特征或未加载成功，
-    直接获取视口中心或指定容器位置执行穿透。
+    针对 Closed Shadow DOM 以及各种静态、动态拦截框的高级物理穿透守卫
     """
     print(f"🔄 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
     
@@ -59,7 +60,6 @@ async def check_and_solve_turnstile(page, description=""):
     ]
     
     try:
-        # 先动态扫描已知选择器
         for selector in cf_selectors:
             element = page.locator(selector).first
             if await element.is_visible(timeout=2000):
@@ -83,18 +83,13 @@ async def check_and_solve_turnstile(page, description=""):
     except Exception as e:
         print(f"ℹ️ 扫描已知验证框时跳过: {e}")
         
-    # 💡 兜底策略：如果内容包含 captcha 且上面没触发点击，进行视口中央强力敲击
     try:
         content = await page.content()
         if "captcha" in content.lower() or "verify you are human" in content.lower():
-            print("🚨 页面文字触发风控警报，但未找到显式 Iframe，进行视口中心物理轰击...")
-            # 动态获取当前视口大小
+            print("🚨 页面文字触发风控警报，进行视口中心物理轰击...")
             viewport = page.viewport_size
             if viewport:
-                cx = viewport["width"] / 2
-                cy = viewport["height"] / 2
-                await page.mouse.click(cx, cy)
-                print("⏳ 视口中心盲点物理敲击完成，等待 6 秒...")
+                await page.mouse.click(viewport["width"] / 2, viewport["height"] / 2)
                 await asyncio.sleep(6)
                 return True
     except:
@@ -103,10 +98,6 @@ async def check_and_solve_turnstile(page, description=""):
 
 
 async def run_automation():
-    if not EMAIL or not PASSWORD:
-        print("错误: 缺少登录凭证 EMAIL 或 PASSWORD 环境变量")
-        sys.exit(1)
-
     print("正在启动带有 Cloudflare-Bypass 守护的全局浏览器实例...")
     
     MAIN_DASH_URL = "https://dash.zampto.net"
@@ -130,64 +121,85 @@ async def run_automation():
         if not page:
             raise Exception("未能成功通过 solver 获取到 Playwright 页面实例。")
 
-        # 注入防检测机制
+        # 彻底抹除自动化指纹特征
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         """)
 
-        # 强行重定向到登录页面
-        print("正在强制导航至登录网关...")
-        await page.goto(
-            "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
-            wait_until="domcontentloaded"
-        )
-        await asyncio.sleep(4)
+        has_logged_in = False
 
-        # 🔗 检查一进入登录页是不是就被 CF 挡住了
-        await check_and_solve_turnstile(page, "刚进入登录页")
+        # 💡 核心优化策略：优先尝试 Cookie 注入免登录，彻底封杀 Google 拦截
+        if ZAMPTO_COOKIES_JSON:
+            print("📦 发现配置了本地持久化 Cookies 凭证，正在尝试免登录直接切入...")
+            try:
+                cookies_list = json.loads(ZAMPTO_COOKIES_JSON)
+                # 显式为主域和认证域同时注入 Cookie
+                await solver.context.add_cookies(cookies_list)
+                print("✅ 凭证数据成功同步至隔离上下文空间。")
+                
+                # 尝试直接去服务器页面测试 Cookie 是否有效
+                await page.goto("https://dash.zampto.net/server?id=6932", wait_until="networkidle")
+                await asyncio.sleep(3)
+                
+                # 检测是否由于 Cookie 失效或仍被拦截退回到登录页
+                if "sign-in" not in page.url and "google" not in page.url:
+                    print("🎉 完美！使用 Cookies 成功跳过全部登录质询，已直接进入目标页！")
+                    has_logged_in = True
+                else:
+                    print("⚠️ 注入的 Cookies 似乎已失效，系统已自动将其踢回，降级准备执行账号密码登录流程...")
+            except Exception as cookie_err:
+                print(f"❌ 尝试解析或注入 Cookie 时发生异常，将自动切回备用方案: {cookie_err}")
 
-        # 1.1 输入 EMAIL
-        print("输入 Email...")
-        email_input = page.locator('input[name="identifier"]')
-        try:
-            await email_input.wait_for(state="visible", timeout=8000)
-        except Exception as e:
-            print("🚨 依然未发现 Email 输入框，判定被硬拦截。触发紧急通关解锁...")
-            # 触发兜底的验证码点击
-            did_solve = await check_and_solve_turnstile(page, "找不到输入框时的紧急状态")
-            if did_solve:
-                # 重新等待输入框
-                await email_input.wait_for(state="visible", timeout=10000)
-            else:
-                raise Exception("无法穿透初始登录的 Cloudflare 防御，页面未正确加载。")
+        # 备用方案：传统的账号密码登录流程（应对没有配置 Cookie 的情况）
+        if not has_logged_in:
+            if not EMAIL or not PASSWORD:
+                raise Exception("未注入有效的 Cookie 且缺少常规 EMAIL/PASSWORD 环境变量，脚本终止。")
 
-        await email_input.fill(EMAIL)
+            print("正在强制导航至传统登录网关...")
+            await page.goto(
+                "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
+                wait_until="domcontentloaded"
+            )
+            await asyncio.sleep(4)
 
-        # 1.2 点击登录提交按钮
-        print("点击登录提交按钮...")
-        login_btn = page.locator('button[type="submit"]')
-        await login_btn.click()
-        await asyncio.sleep(3)
-        
-        await check_and_solve_turnstile(page, "提交 Email 后")
+            await check_and_solve_turnstile(page, "刚进入登录页")
 
-        # 1.3 输入密码
-        print("等待密码页面加载并输入密码...")
-        password_input = page.locator('input[name="password"]')
-        await password_input.wait_for(state="visible", timeout=15000)
-        await password_input.fill(PASSWORD)
+            print("输入 Email...")
+            email_input = page.locator('input[name="identifier"]')
+            try:
+                await email_input.wait_for(state="visible", timeout=8000)
+            except Exception as e:
+                # 如果找不到，多半是出了 Google 或者别的强验证，尝试做最后一次突围点击
+                print("🚨 输入框未显现（可能被 Google 或拦截挡住），尝试物理破盾...")
+                did_solve = await check_and_solve_turnstile(page, "找不到输入框时的紧急状态")
+                if did_solve:
+                    await email_input.wait_for(state="visible", timeout=10000)
+                else:
+                    raise Exception("页面打不开或卡死在第三方/Google登录风控层，请优先配置 ZAMPTO_COOKIES 免登录。")
 
-        # 1.4 点击继续按钮
-        print("点击继续提交按钮...")
-        continue_btn = page.locator('button[type="submit"]')
-        await continue_btn.click()
+            await email_input.fill(EMAIL)
 
-        # 柔性等待登录状态写入
-        await asyncio.sleep(5)
+            print("点击登录提交按钮...")
+            login_btn = page.locator('button[type="submit"]')
+            await login_btn.click()
+            await asyncio.sleep(3)
+            
+            await check_and_solve_turnstile(page, "提交 Email 后")
 
-        # 2. 直接跨过主页，强行奔向目标续期服务器页面
-        print("正在跨越主页，直接强行访问目标服务器页面...")
-        await page.goto("https://dash.zampto.net/server?id=6932", wait_until="networkidle")
+            print("等待密码页面加载并输入密码...")
+            password_input = page.locator('input[name="password"]')
+            await password_input.wait_for(state="visible", timeout=15000)
+            await password_input.fill(PASSWORD)
+
+            print("点击继续提交按钮...")
+            continue_btn = page.locator('button[type="submit"]')
+            await continue_btn.click()
+
+            await asyncio.sleep(5)
+            
+            print("正在跨越主页，直接强行访问目标服务器页面...")
+            await page.goto("https://dash.zampto.net/server?id=6932", wait_until="networkidle")
+
         print("已成功切入服务器管理页面，缓冲 5 秒等待页面后台 JS 渲染完毕...")
         await asyncio.sleep(5)
 
@@ -227,7 +239,7 @@ async def run_automation():
 
         print("点击最外层的 Renew Server 按钮，唤起安全验证弹窗...")
         await renew_link.click()
-        await asyncio.sleep(3.0) # 留出弹窗完全展开的动画时间
+        await asyncio.sleep(3.0) 
         
         # 🔗 核心突破点：处理续期弹窗中被 Closed Shadow DOM 隐藏的 Turnstile 人机验证框
         await check_and_solve_turnstile(page, "点击 Renew 按钮弹出安全验证后")
@@ -236,7 +248,7 @@ async def run_automation():
         print("等待 8 秒让续期业务后台确认结果...")
         await asyncio.sleep(8)
 
-        # 再次清理广告，保证截图重点突出
+        # 再次清理广告
         try:
             await page.evaluate("""() => {
                 document.querySelectorAll('ins.adsbygoogle, iframe[id*="google"]').forEach(el => el.remove());
