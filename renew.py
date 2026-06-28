@@ -43,44 +43,43 @@ def send_telegram_notification(message, screenshot_path=None):
         print(f"发送 TG 通知失败: {e}")
 
 
-async def check_and_solve_cf(solver, description=""):
+async def check_and_solve_turnstile(page, description=""):
     """
-    核心自动化守护函数：检测当前页面是否有 Cloudflare 验证框。
+    通用 Turnstile 自动穿透守卫：
+    动态检测页面（包括嵌套 Iframe）里是否存在 Cloudflare Turnstile 验证框，
+    如果存在，自动切入 Iframe 并精准点击复选框。
     """
-    page = solver.page
-    if not page:
-        return
-        
-    print(f"🔄 正在检查是否触发 CF 人机验证 ({description})...")
+    print(f"🔄 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
     
-    cf_selectors = [
-        "div.cf-turnstile",
-        "iframe[src*='challenges.cloudflare.com']",
-        "#cf-challenge-slot",
-        "div:has-text('Verify you are human')"
-    ]
+    # 1. 寻找 Turnstile 的核心容器 Iframe
+    iframe_selector = "iframe[src*='challenges.cloudflare.com']"
     
-    is_cf_present = False
-    for selector in cf_selectors:
-        try:
-            element = page.locator(selector).first
-            if await element.is_visible(timeout=3000):
-                is_cf_present = True
-                print(f"⚠️ 检测到 CF 拦截元素: {selector}")
-                break
-        except:
-            continue
-
-    if is_cf_present:
-        print("🚀 发现 Cloudflare 验证框！正在激活 cfbypass 穿透人机盾...")
-        try:
-            await solver.bypass()
-            print("✅ cfbypass 处理流程结束，等待 3 秒使页面状态稳定...")
-            await asyncio.sleep(3)
-        except Exception as e:
-            print(f"❌ 穿透 CF 盾时发生异常: {e}")
-    else:
-        print("🔍 未发现 CF 验证框，继续下一步。")
+    try:
+        # 限时 4 秒快速探测，不阻塞正常业务流程
+        iframe_element = page.locator(iframe_selector).first
+        if await iframe_element.is_visible(timeout=4000):
+            print("⚠️ 现场发现 Cloudflare Turnstile 验证码 Iframe！准备穿透...")
+            
+            # 获取 iframe 视图对象
+            box = await iframe_element.bounding_box()
+            if box:
+                # 方案 A：直接在页面上计算 Iframe 的中心绝对坐标进行物理点击，绕过元素防护
+                click_x = box["x"] + box["width"] / 2
+                click_y = box["y"] + box["height"] / 2
+                print(f"🎯 正在向验证码中心坐标 [{click_x}, {click_y}] 发送物理点击...")
+                await page.mouse.click(click_x, click_y)
+            else:
+                # 方案 B：如果拿不到 bounding_box，尝试切入 iframe 内部点击 #challenge-stage
+                frame = page.frame(url=lambda u: "challenges.cloudflare.com" in u)
+                if frame:
+                    await frame.locator('#challenge-stage, input[type="checkbox"]').first.click(timeout=3000)
+            
+            print("⏳ 已触发验证码点击，等待 5 秒让验证状态在后台同步完成...")
+            await asyncio.sleep(5)
+        else:
+            print("🔍 未发现 CF 验证元素，页面安全。")
+    except Exception as e:
+        print(f"ℹ️ 探测验证框时安全跳过或发生异常: {e}")
 
 
 async def run_automation():
@@ -90,33 +89,34 @@ async def run_automation():
 
     print("正在启动带有 Cloudflare-Bypass 守护的全局浏览器实例...")
     
-    # 修复点：带上必填的 domain 参数，满足底层 __init__ 的位置参数要求
+    # 💡 核心调整 1：将 domain 直接设置为登录页
+    # 这样一会调用 bypass 时，它内部刚好帮我们把浏览器初始化完，并顺利停留在登录页
+    LOGIN_URL = "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl"
     solver = CF_Solver(
-        domain="https://dash.zampto.net",
+        domain=LOGIN_URL,
         headless=True,
         slow_mo=150,
         poll_interval=1.0,
-        max_wait=30.0,
+        max_wait=45.0,
     )
 
     page = None
     try:
-        # 缓冲 3 秒，等待 solver 内部完全就绪
-        await asyncio.sleep(3)
+        print("正在调用 cfbypass 建立浏览器环境并加载登录页面...")
+        # 💡 核心调整 2：调用 bypass() 唤醒初始化进程（不传任何参数）
+        try:
+            await solver.bypass()
+        except Exception as bypass_err:
+            print(f"💡 提示: 初始 bypass 探测结束（可能未生成 clearance cookie，属于正常现象）: {bypass_err}")
+        
+        # 此时 solver.page 绝对已经成功被建立并处于就绪状态
         page = solver.page
-        
         if not page:
-            raise Exception("未能成功初始化 Playwright 页面实例，solver.page 返回空。")
+            raise Exception("未能成功通过 solver 获取到 Playwright 页面实例。")
 
-        # 1. 显式控制页面跳转到登录页
-        print("正在控制浏览器访问登录页面...")
-        await page.goto(
-            "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
-            wait_until="networkidle",
-        )
-        
-        # 🔗 访问后检查
-        await check_and_solve_cf(solver, "进入登录页后")
+        print("浏览器就绪。")
+        # 🔗 访问后检查一次
+        await check_and_solve_turnstile(page, "进入登录页后")
 
         # 1.1 输入 EMAIL
         print("输入 Email...")
@@ -129,7 +129,7 @@ async def run_automation():
         login_btn = page.locator('button[type="submit"]')
         await login_btn.click()
         # 🔗 动作后检查
-        await check_and_solve_cf(solver, "提交 Email 后")
+        await check_and_solve_turnstile(page, "提交 Email 后")
 
         # 1.3 输入密码
         print("等待密码页面加载并输入密码...")
@@ -142,7 +142,7 @@ async def run_automation():
         continue_btn = page.locator('button[type="submit"]')
         await continue_btn.click()
         # 🔗 动作后检查
-        await check_and_solve_cf(solver, "提交密码后")
+        await check_and_solve_turnstile(page, "提交密码后")
 
         # 等待自动跳转确认登录成功
         print("检查是否登录成功...")
@@ -153,7 +153,7 @@ async def run_automation():
         print("访问目标服务器页面...")
         await page.goto("https://dash.zampto.net/server?id=6932", wait_until="load")
         # 🔗 访问后检查
-        await check_and_solve_cf(solver, "进入目标服务器页后")
+        await check_and_solve_turnstile(page, "进入目标服务器页后")
 
         # 清理干扰广告元素
         print("清理干扰广告元素...")
@@ -170,9 +170,10 @@ async def run_automation():
 
         print("点击最外层的 Renew Server 按钮，唤起安全验证弹窗...")
         await renew_link.click()
+        await asyncio.sleep(2) # 稍微等待弹窗动画完成
         
-        # 🔗 关键动作后检查（处理弹窗中的 CF 验证码）
-        await check_and_solve_cf(solver, "点击 Renew 按钮弹出安全验证后")
+        # 🔗 核心突破点：处理续期弹窗中的 Turnstile 人机验证框
+        await check_and_solve_turnstile(page, "点击 Renew 按钮弹出安全验证后")
 
         # 4. 稍作等待让续期操作在验证通过后有充足时间完成
         print("等待 8 秒让续期业务后台确认结果...")
