@@ -21,20 +21,31 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Setup Gost Proxy
+    - name: 启用 WARP 网络
+      uses: fscarmen/warp-on-actions@v1.3
+      with:
+          stack: dual
+          mode: client
+
+    - name: 修复 DNS
       run: |
-        # 👇👇👇 正在启动gost代理 👇👇👇                
-        # 修复：改用容器自带的 curl -L -O 代替 wget
-        curl -sSL -O https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
-        gunzip -f gost-linux-amd64-2.11.5.gz
-        chmod +x gost-linux-amd64-2.11.5
-        
-        echo "🔗 启动 Gost 隧道..."
-        ./gost-linux-amd64-2.11.5 -L=http://:1080 -F="${{ secrets.SOCKS5_URL }}" > gost.log 2>&1 &
-        
-        sleep 5
-        echo "--- 🌐 连通性测试 ---"
-        curl -I -x http://127.0.0.1:1080 https://www.google.com
+          echo "[INFO] 停用 systemd-resolved，设置公共 DNS..."
+          sudo systemctl stop systemd-resolved 2>/dev/null || true
+          sudo systemctl disable systemd-resolved 2>/dev/null || true
+
+          sudo rm -f /etc/resolv.conf
+          echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 1.0.0.1" | sudo tee /etc/resolv.conf
+
+          sleep 2
+
+          echo "[INFO] DNS 测试:"
+          nslookup dash.zampto.net 1.1.1.1 || echo "[WARN] 解析失败"
+
+          echo ""
+          echo "[INFO] 当前出口 IP:"
+          curl -s --max-time 10 https://api.ipify.org && echo
+          echo "[INFO] WARP Trace:"
+          curl -s --max-time 10 https://www.cloudflare.com/cdn-cgi/trace | grep -E 'ip=|warp=|loc=' || true
 
     - name: Run Renewal Script
       env:
