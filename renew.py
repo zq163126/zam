@@ -45,7 +45,8 @@ def send_telegram_notification(message, screenshot_path=None):
 
 async def check_and_solve_turnstile(page, description=""):
     """
-    针对 Closed Shadow DOM 以及各种静态、动态拦截框的高级物理穿透守卫
+    高级物理穿透守卫：不仅看选择器，如果页面包含了 Turnstile 特征或未加载成功，
+    直接获取视口中心或指定容器位置执行穿透。
     """
     print(f"🔄 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
     
@@ -53,14 +54,16 @@ async def check_and_solve_turnstile(page, description=""):
         "iframe[src*='challenges.cloudflare.com']",
         "#turnstileContainer",
         "#cf-challenge-slot",
-        "#renewModal .confirmation-modal-content"
+        "#renewModal .confirmation-modal-content",
+        "div:has-text('Verify you are human')"
     ]
     
     try:
+        # 先动态扫描已知选择器
         for selector in cf_selectors:
             element = page.locator(selector).first
-            if await element.is_visible(timeout=3000):
-                print(f"⚠️ 现场发现安全拦截/验证元素: {selector}，启动物理测距穿透...")
+            if await element.is_visible(timeout=2000):
+                print(f"⚠️ 现场发现拦截元素: {selector}，开始进行物理定位...")
                 box = await element.bounding_box()
                 if box:
                     click_x = box["x"] + (box["width"] / 2)
@@ -69,17 +72,34 @@ async def check_and_solve_turnstile(page, description=""):
                     if "renewModal" in selector:
                         click_y = box["y"] + (box["height"] * 0.62)
                         
-                    print(f"🎯 正在向目标中心坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理敲击...")
+                    print(f"🎯 正在向目标坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理敲击...")
                     await page.mouse.move(click_x, click_y)
                     await page.mouse.down()
                     await asyncio.sleep(0.1)
                     await page.mouse.up()
-                    
-                    print("⏳ 物理点击完成，留出 6 秒供验证器后台响应...")
+                    print("⏳ 物理点击完成，等待 6 秒同步状态...")
                     await asyncio.sleep(6)
-                    return
+                    return True
     except Exception as e:
-        print(f"ℹ️ 测距守卫异常或跳过: {e}")
+        print(f"ℹ️ 扫描已知验证框时跳过: {e}")
+        
+    # 💡 兜底策略：如果内容包含 captcha 且上面没触发点击，进行视口中央强力敲击
+    try:
+        content = await page.content()
+        if "captcha" in content.lower() or "verify you are human" in content.lower():
+            print("🚨 页面文字触发风控警报，但未找到显式 Iframe，进行视口中心物理轰击...")
+            # 动态获取当前视口大小
+            viewport = page.viewport_size
+            if viewport:
+                cx = viewport["width"] / 2
+                cy = viewport["height"] / 2
+                await page.mouse.click(cx, cy)
+                print("⏳ 视口中心盲点物理敲击完成，等待 6 秒...")
+                await asyncio.sleep(6)
+                return True
+    except:
+        pass
+    return False
 
 
 async def run_automation():
@@ -110,26 +130,36 @@ async def run_automation():
         if not page:
             raise Exception("未能成功通过 solver 获取到 Playwright 页面实例。")
 
+        # 注入防检测机制
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        """)
+
         # 强行重定向到登录页面
         print("正在强制导航至登录网关...")
         await page.goto(
             "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
             wait_until="domcontentloaded"
         )
-        await asyncio.sleep(3)
+        await asyncio.sleep(4)
 
+        # 🔗 检查一进入登录页是不是就被 CF 挡住了
         await check_and_solve_turnstile(page, "刚进入登录页")
 
         # 1.1 输入 EMAIL
         print("输入 Email...")
         email_input = page.locator('input[name="identifier"]')
         try:
-            await email_input.wait_for(state="visible", timeout=15000)
+            await email_input.wait_for(state="visible", timeout=8000)
         except Exception as e:
-            print("🚨 登录输入框未显现，尝试进行全屏中央紧急物理破壳...")
-            await page.mouse.click(400, 300)
-            await asyncio.sleep(4)
-            await email_input.wait_for(state="visible", timeout=10000)
+            print("🚨 依然未发现 Email 输入框，判定被硬拦截。触发紧急通关解锁...")
+            # 触发兜底的验证码点击
+            did_solve = await check_and_solve_turnstile(page, "找不到输入框时的紧急状态")
+            if did_solve:
+                # 重新等待输入框
+                await email_input.wait_for(state="visible", timeout=10000)
+            else:
+                raise Exception("无法穿透初始登录的 Cloudflare 防御，页面未正确加载。")
 
         await email_input.fill(EMAIL)
 
@@ -137,7 +167,7 @@ async def run_automation():
         print("点击登录提交按钮...")
         login_btn = page.locator('button[type="submit"]')
         await login_btn.click()
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         
         await check_and_solve_turnstile(page, "提交 Email 后")
 
@@ -153,7 +183,7 @@ async def run_automation():
         await continue_btn.click()
 
         # 柔性等待登录状态写入
-        await asyncio.sleep(4)
+        await asyncio.sleep(5)
 
         # 2. 直接跨过主页，强行奔向目标续期服务器页面
         print("正在跨越主页，直接强行访问目标服务器页面...")
@@ -170,8 +200,7 @@ async def run_automation():
         except:
             pass
 
-        # 3. 💡 深度优化点：多重组合拳选择器定位 Renew 按钮
-        # 依次尝试：原生 onclick 属性、包含 'Renew Server' 文本的按钮、包含 'Renew' 文本的 A 标签
+        # 3. 多重组合拳选择器定位 Renew 按钮
         print("开始定位 Renew 按钮...")
         renew_selectors = [
             'a[onclick*="handleServerRenewal"]',
