@@ -112,6 +112,9 @@ async def run_automation():
         if not page:
             raise Exception("未能成功通过 solver 获取到 Playwright 页面实例。")
 
+        # 💡 优化 1：将视口分辨率调整为 1920x1080，让截图看全整个页面
+        await page.set_viewport_size({"width": 1920, "height": 1080})
+
         # 抹除自动化指纹特征
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
@@ -232,13 +235,12 @@ async def run_automation():
         except:
             pass
 
-        # 3. 定位 Renew 按钮
-        print("开始定位 Renew 按钮...")
+        # 💡 优化 2：根据你提供的 HTML，用最具排他性的选择器精确定位并点击真正的 Renew Server 按钮
+        print("开始定位特定的 Renew Server 按钮...")
         renew_selectors = [
+            'a[onclick*="handleServerRenewal(event, 6932)"]',
             'a[onclick*="handleServerRenewal"]',
-            'button:has-text("Renew Server")',
-            'a:has-text("Renew")',
-            '.btn:has-text("Renew")'
+            'a:has-text("Renew Server")'
         ]
         
         renew_link = None
@@ -247,7 +249,7 @@ async def run_automation():
                 locator = page.locator(sel).first
                 if await locator.is_visible(timeout=3000):
                     renew_link = locator
-                    print(f"✅ 成功通过选择器 [{sel}] 锁定 Renew 元素！")
+                    print(f"✅ 成功锁定目标 Renew 元素选择器: [{sel}]")
                     break
             except:
                 continue
