@@ -48,51 +48,78 @@ def send_telegram_notification(message, screenshot_path=None):
 
 async def check_and_solve_turnstile_safely(page, description=""):
     """
-    配合 cfbypass 环境。
-    增加显式日志输出，实时打印是否找到 CF 验证框元素以及计算出的绝对坐标。
+    深度全局扫描：遍历页面上所有的 frames，彻底攻克多层嵌套导致“未发现验证框”的问题。
     """
     print(f"🔄 [检查开始] 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
-    
-    iframe_selector = "iframe[src*='challenges.cloudflare.com']"
+    await asyncio.sleep(2.0)  # 给弹窗和异步域留出充足的加载时间
     
     try:
-        cf_iframe = page.locator(iframe_selector).first
-        is_visible = await cf_iframe.is_visible(timeout=4000)
-        
-        # 📢 显式输出是否找到了元素
-        if is_visible:
-            print(f"🔍 [元素探测] 成功：已在页面上找到 CF 验证框元素 ({iframe_selector})！")
-        else:
-            print(f"🔍 [元素探测] 未发现：页面上当前没有显示 CF 验证框 ({iframe_selector})。")
-            return False
+        # 1. 打印现场所有的 frames 状态，供日志分析
+        all_frames = page.frames
+        print(f"📊 [调试日志] 当前全页面共检测到 {len(all_frames)} 个 iframe 框架域。")
+        for idx, f in enumerate(all_frames):
+            print(f"  -> Frame [{idx}]: URL={f.url[:90]}")
 
-        print("⚠️ 正在尝试提取该验证框的几何空间数据...")
-        box = await cf_iframe.bounding_box()
+        # 2. 全局动态寻找包含 cloudflare 挑战域的真实 iframe 节点
+        cf_frame_instance = None
+        target_element = None
         
-        if box:
-            print(f"📊 [坐标数据] 验证框实际位置 -> X: {box['x']:.1f}, Y: {box['y']:.1f}, 宽度: {box['width']:.1f}, 高度: {box['height']:.1f}")
-            
-            # 依据真实的 Clerk 续期弹窗图片特征计算点击热区
-            click_x = box["x"] + (box["width"] * 0.22)
-            click_y = box["y"] + (box["height"] / 2)
-            
-            print(f"🎯 [执行动作] 测算完成！正向人机复选框目标坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理点击...")
-            
-            # 模拟真人移动并敲击
-            await page.mouse.move(click_x, click_y)
-            await asyncio.sleep(0.1)
-            await page.mouse.down()
-            await asyncio.sleep(0.15)
-            await page.mouse.up()
-            
-            print("⏳ [点击完成] 精准点击交互已触发，留出 8 秒等待绿勾转完和后台接口下发凭证...")
-            await asyncio.sleep(8)
-            return True
+        for f in all_frames:
+            if "challenges.cloudflare.com" in f.url:
+                cf_frame_instance = f
+                print(f"🎯 [精准捕获] 成功在子域中锁定 CF 挑战 Frame: {f.url[:90]}")
+                break
+
+        if cf_frame_instance:
+            # 找到内部的挑战容器节点
+            target_element = cf_frame_instance.locator('#challenge-stage, .ctp-checkbox-label, #turnstile-wrapper').first
         else:
-            print("❌ [错误] 虽然找到了验证框元素，但无法获取到它的边界视口数据 (bounding_box 为空)。")
+            # 备用方案：通过主页面常规 locator
+            iframe_selector = "iframe[src*='challenges.cloudflare.com']"
+            cf_locator = page.locator(iframe_selector).first
+            if await cf_locator.is_visible(timeout=2000):
+                print(f"🎯 [精准捕获] 通过主页面选择器找到了 CF 元素。")
+                box = await cf_locator.bounding_box()
+                if box:
+                    click_x = box["x"] + (box["width"] * 0.22)
+                    click_y = box["y"] + (box["height"] / 2)
+                    print(f"🚀 正向常规坐标位置 [{click_x:.1f}, {click_y:.1f}] 发起敲击...")
+                    await page.mouse.move(click_x, click_y)
+                    await page.mouse.down()
+                    await asyncio.sleep(0.1)
+                    await page.mouse.up()
+                    await asyncio.sleep(6)
+                    return True
+
+        # 3. 如果成功穿透进了子 frame，通过其绑定的真实页面父容器计算视口绝对坐标
+        if cf_frame_instance:
+            # 寻找承载该 frame 的主体 DOM 节点
+            owner_frame_element = await cf_frame_instance.frame_element()
+            box = await owner_frame_element.bounding_box()
+            if box:
+                print(f"📊 [坐标数据] 穿透测算 -> X: {box['x']:.1f}, Y: {box['y']:.1f}, 宽度: {box['width']:.1f}, 高度: {box['height']:.1f}")
+                
+                # 严格对准 Managed 拦截框的左侧复选框热区
+                click_x = box["x"] + (box["width"] * 0.22)
+                click_y = box["y"] + (box["height"] / 2)
+                
+                print(f"🎯 [执行动作] 穿透定位成功！正向实坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理点击...")
+                await page.mouse.move(click_x, click_y)
+                await asyncio.sleep(0.1)
+                await page.mouse.down()
+                await asyncio.sleep(0.15)
+                await page.mouse.up()
+                
+                print("⏳ [点击完成] 物理点击交互已触发，留出 8 秒等待凭证同步...")
+                await asyncio.sleep(8)
+                return True
+            else:
+                print("❌ [错误] 找到了 CF 子框架域，但无法逆向获取其 bounding_box 视口数据。")
+
+        print("🔍 [元素探测] 经过多层深描，确定当前现场没有挂载或阻挡的 CF 验证码。")
             
     except Exception as e:
-        print(f"ℹ️ [异常跳过] 扫描或处理验证框时发生非致命异常: {e}")
+        print(f"ℹ️ [异常跳过] 全局深描验证框时发生非致命异常: {e}")
     return False
 
 
@@ -267,9 +294,9 @@ async def run_automation():
 
         print("点击最外层的 Renew Server 按钮，唤起安全验证弹窗...")
         await renew_link.click()
-        await asyncio.sleep(4.0)  # 轻微调大弹窗动画缓冲时间，确保 iframe 完全就绪
+        await asyncio.sleep(4.0)
 
-        # 🔗 精准日志测算并切入点击
+        # 🔗 执行全新升级的全局 Frames 穿透探测
         await check_and_solve_turnstile_safely(page, "点击 Renew 按钮弹出安全验证后")
 
         # 4. 稍作等待让续期操作在验证通过后有充足时间完成
