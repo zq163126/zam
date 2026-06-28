@@ -112,7 +112,7 @@ async def run_automation():
         if not page:
             raise Exception("未能成功通过 solver 获取到 Playwright 页面实例。")
 
-        # 💡 优化 1：将视口分辨率调整为 1920x1080，让截图看全整个页面
+        # 将视口分辨率调整为 1920x1080，让截图看全整个页面
         await page.set_viewport_size({"width": 1920, "height": 1080})
 
         # 抹除自动化指纹特征
@@ -130,7 +130,8 @@ async def run_automation():
                 await solver.context.add_cookies(cookies_list)
                 print("✅ 凭证数据成功同步至隔离上下文空间。")
                 
-                await page.goto("https://dash.zampto.net/server?id=6932", wait_until="networkidle")
+                # 免登录跳转：同步修改为 domcontentloaded 增强抗超时能力
+                await page.goto("https://dash.zampto.net/server?id=6932", wait_until="domcontentloaded")
                 await asyncio.sleep(3)
                 
                 if "sign-in" not in page.url and "google" not in page.url:
@@ -155,7 +156,7 @@ async def run_automation():
             content_before = await page.content()
             if "verify you are human" in content_before.lower() or "clerk" not in content_before.lower():
                 print("⚠️ 监测到页面存在初次 CF 拦截或渲染不全，正在启动抗风控二次强制冲刷...")
-                await page.goto(LOGIN_URL, wait_until="networkidle")
+                await page.goto(LOGIN_URL, wait_until="domcontentloaded")
                 await asyncio.sleep(4)
 
             print("📸 正在截取【初始登录页面】视图以供分析...")
@@ -222,7 +223,8 @@ async def run_automation():
             await asyncio.sleep(5)
             
             print("正在跨越主页，直接强行访问目标服务器页面...")
-            await page.goto("https://dash.zampto.net/server?id=6932", wait_until="networkidle")
+            # 💡 核心修复点：将等待标准降级为 domcontentloaded。DOM结构好就立即放行，避免被残余的网络请求拖到30秒超时挂掉。
+            await page.goto("https://dash.zampto.net/server?id=6932", wait_until="domcontentloaded")
 
         print("已成功切入服务器管理页面，缓冲 5 秒等待页面后台 JS 渲染完毕...")
         await asyncio.sleep(5)
@@ -235,7 +237,7 @@ async def run_automation():
         except:
             pass
 
-        # 💡 优化 2：根据你提供的 HTML，用最具排他性的选择器精确定位并点击真正的 Renew Server 按钮
+        # 根据你提供的 HTML，用最具排他性的选择器精确定位并点击真正的 Renew Server 按钮
         print("开始定位特定的 Renew Server 按钮...")
         renew_selectors = [
             'a[onclick*="handleServerRenewal(event, 6932)"]',
