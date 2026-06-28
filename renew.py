@@ -46,12 +46,13 @@ def send_telegram_notification(message, screenshot_path=None):
 async def check_and_solve_cf(solver, description=""):
     """
     核心自动化守护函数：检测当前页面是否有 Cloudflare 验证框。
-    如果有，立即调用 cfbypass 穿透它。
     """
     page = solver.page
+    if not page:
+        return
+        
     print(f"🔄 正在检查是否触发 CF 人机验证 ({description})...")
     
-    # 常见的 Cloudflare Turnstile 判定特征（包括特定的 class、ID、或带有 Turnstile 标记的 iframe）
     cf_selectors = [
         "div.cf-turnstile",
         "iframe[src*='challenges.cloudflare.com']",
@@ -62,7 +63,6 @@ async def check_and_solve_cf(solver, description=""):
     is_cf_present = False
     for selector in cf_selectors:
         try:
-            # 快速探测元素是否存在且可见，限时 3 秒，不阻塞正常流程
             element = page.locator(selector).first
             if await element.is_visible(timeout=3000):
                 is_cf_present = True
@@ -89,23 +89,21 @@ async def run_automation():
         sys.exit(1)
 
     print("正在启动带有 Cloudflare-Bypass 守护的全局浏览器实例...")
+    
+    # 修复点 1：初始化时不传 domain 属性，防止其内部异步竞争导致 page 变成 None
     solver = CF_Solver(
-        domain="https://dash.zampto.net",
         headless=True,
         slow_mo=150,
         poll_interval=1.0,
         max_wait=30.0,
     )
 
+    page = None
     try:
-        page = solver.page
-
-        # 1. 访问登录页面
-        print("正在访问登录页面...")
-        await page.goto(
-            "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
-            wait_until="networkidle",
-        )
+        # 修复点 2：首次访问通过传递 url 给 solver.bypass 唤醒，确保 page 实例化绝对成功
+        print("正在初始化并访问登录页面...")
+        page = await solver.bypass("https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl")
+        
         # 🔗 访问后检查
         await check_and_solve_cf(solver, "进入登录页后")
 
@@ -188,10 +186,13 @@ async def run_automation():
         error_msg = f"脚本运行发生异常: {str(e)}"
         print(error_msg)
         try:
-            await page.screenshot(path=SCREENSHOT_PATH)
-            send_telegram_notification(
-                f"❌ 续期失败！\n错误信息: {error_msg}", SCREENSHOT_PATH
-            )
+            if page:
+                await page.screenshot(path=SCREENSHOT_PATH)
+                send_telegram_notification(
+                    f"❌ 续期失败！\n错误信息: {error_msg}", SCREENSHOT_PATH
+                )
+            else:
+                send_telegram_notification(f"❌ 续期失败且无法截图（浏览器未就绪）！\n错误信息: {error_msg}")
         except:
             send_telegram_notification(f"❌ 续期失败且无法截图！\n错误信息: {error_msg}")
     finally:
