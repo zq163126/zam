@@ -63,7 +63,7 @@ jobs:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         PROXY: 127.0.0.1:1080
-        HTTP_PROXY: http://127.0.0.1:1080
-        HTTPS_PROXY: http://127.0.0.1:1080
+   #     HTTP_PROXY: http://127.0.0.1:1080
+   #     HTTPS_PROXY: http://127.0.0.1:1080
       run: |
         python renew.py
