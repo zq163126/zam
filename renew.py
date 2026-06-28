@@ -90,8 +90,9 @@ async def run_automation():
 
     print("正在启动带有 Cloudflare-Bypass 守护的全局浏览器实例...")
     
-    # 修复点 1：初始化时不传 domain 属性，防止其内部异步竞争导致 page 变成 None
+    # 修复点：带上必填的 domain 参数，满足底层 __init__ 的位置参数要求
     solver = CF_Solver(
+        domain="https://dash.zampto.net",
         headless=True,
         slow_mo=150,
         poll_interval=1.0,
@@ -100,9 +101,19 @@ async def run_automation():
 
     page = None
     try:
-        # 修复点 2：首次访问通过传递 url 给 solver.bypass 唤醒，确保 page 实例化绝对成功
-        print("正在初始化并访问登录页面...")
-        page = await solver.bypass("https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl")
+        # 缓冲 3 秒，等待 solver 内部完全就绪
+        await asyncio.sleep(3)
+        page = solver.page
+        
+        if not page:
+            raise Exception("未能成功初始化 Playwright 页面实例，solver.page 返回空。")
+
+        # 1. 显式控制页面跳转到登录页
+        print("正在控制浏览器访问登录页面...")
+        await page.goto(
+            "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
+            wait_until="networkidle",
+        )
         
         # 🔗 访问后检查
         await check_and_solve_cf(solver, "进入登录页后")
