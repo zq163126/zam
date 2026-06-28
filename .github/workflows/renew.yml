@@ -23,23 +23,30 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    # 修复步骤：手动更新 apt 并安装兼容的 alound/gwt 基础库，防止 Playwright 找不到依赖报 100 错误
+    - name: Fix Playwright System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libasound2t64 || sudo apt-get install -y libasound2
+        sudo apt-get install -y libgbm1
+
     - name: Install Playwright Browsers
       run: |
         playwright install chromium --with-deps
 
     - name: Setup Gost Proxy
       run: |
-          # 👇👇👇 正在启动gost代理 👇👇👇                
-          wget -q https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
-          gunzip -f gost-linux-amd64-2.11.5.gz
-          chmod +x gost-linux-amd64-2.11.5
-          
-          echo "🔗 启动 Gost 隧道: $SOCKS5_URL"
-          ./gost-linux-amd64-2.11.5 -L=http://:1080 -F="${{ secrets.SOCKS5_URL }}" > gost.log 2>&1 &
-          
-          sleep 5
-          echo "--- 🌐 连通性测试 ---"
-          curl -I -x http://127.0.0.1:1080 https://www.google.com
+        # 👇👇👇 正在启动gost代理 👇👇👇                
+        wget -q https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
+        gunzip -f gost-linux-amd64-2.11.5.gz
+        chmod +x gost-linux-amd64-2.11.5
+        
+        echo "🔗 启动 Gost 隧道..."
+        ./gost-linux-amd64-2.11.5 -L=http://:1080 -F="${{ secrets.SOCKS5_URL }}" > gost.log 2>&1 &
+        
+        sleep 5
+        echo "--- 🌐 连通性测试 ---"
+        curl -I -x http://127.0.0.1:1080 https://www.google.com
 
     - name: Run Renewal Script
       env:
@@ -48,5 +55,8 @@ jobs:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         PROXY: 127.0.0.1:1080
+        # 额外增加全局代理环境变量，确保 cfbypass 组件在底层请求时也无缝走代理
+        HTTP_PROXY: http://127.0.0.1:1080
+        HTTPS_PROXY: http://127.0.0.1:1080
       run: |
         python renew.py
