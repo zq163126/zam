@@ -6,11 +6,9 @@ from playwright.async_api import async_playwright
 
 # 兼容处理 cfbypass.py 的各种放置方式
 try:
-    # 情况 1：如果你把 cfbypass.py 直接放到了项目根目录下
     from cfbypass import CF_Solver
 except ImportError:
     try:
-        # 情况 2：如果你创建了 cfbypass 文件夹，且里面是 cfbypass.py
         from cfbypass.cfbypass import CF_Solver
     except ImportError:
         print("错误: 未能在项目中找到 'cfbypass.py'，请确保该文件已放入项目根目录或 cfbypass 文件夹下。")
@@ -125,9 +123,9 @@ async def run_automation():
             await email_input.wait_for(state="visible", timeout=15000)
             await email_input.fill(EMAIL)
 
-            # 1.2 点击登录按钮
-            print("点击登录...")
-            login_btn = page.locator('button[type="submit"]:has-text("登录")')
+            # 1.2 点击登录按钮（移除中文字符过滤，纯属性精确定位）
+            print("点击登录提交按钮...")
+            login_btn = page.locator('button[type="submit"]')
             await login_btn.click()
 
             # 1.3 输入密码
@@ -136,9 +134,9 @@ async def run_automation():
             await password_input.wait_for(state="visible", timeout=15000)
             await password_input.fill(PASSWORD)
 
-            # 1.4 点击继续
-            print("点击继续...")
-            continue_btn = page.locator('button[type="submit"]:has-text("继续")')
+            # 1.4 点击继续（移除中文字符过滤，纯属性精确定位）
+            print("点击继续提交按钮...")
+            continue_btn = page.locator('button[type="submit"]')
             await continue_btn.click()
 
             # 等待自动跳转确认登录成功
@@ -180,9 +178,8 @@ async def run_automation():
                 send_telegram_notification(f"❌ 续期失败且无法截图！\n错误信息: {error_msg}")
         finally:
             await context.close()
-            browser.close()
+            await browser.close()
 
 
 if __name__ == "__main__":
-    # 启动异步主事件循环
     asyncio.run(run_automation())
