@@ -7,7 +7,9 @@ on:
 
 jobs:
   renew:
-    runs-on: ubuntu-latest
+    # 核心绝杀：强制指定使用传统的 Ubuntu 22.04 稳定版系统
+    # 彻底避开新版 Ubuntu 24.04 的包名丢失 Bug，找回以前丝滑的运行体验
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Checkout repository
@@ -23,15 +25,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 核心修复：使用官方推荐的独立依赖安装命令，让 Playwright 自己去适配最新系统，不再报 100 错误
-    - name: Install Playwright System Dependencies
+    # 传统系统下，直接带上 --with-deps 一键安装浏览器和全量依赖，绝对不会报错
+    - name: Install Playwright Browsers and Deps
       run: |
-        playwright install-deps chromium
-
-    # 纯粹下载和解压 chromium 浏览器二进制文件
-    - name: Install Playwright Browsers
-      run: |
-        playwright install chromium
+        playwright install chromium --with-deps
 
     - name: Setup Gost Proxy
       run: |
