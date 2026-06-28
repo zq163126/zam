@@ -23,16 +23,35 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 修复步骤：手动更新 apt 并安装兼容的 alound/gwt 基础库，防止 Playwright 找不到依赖报 100 错误
-    - name: Fix Playwright System Dependencies
+    # 核心修复：手动安装无头浏览器所需的全部底层依赖（避开包名过时的旧依赖）
+    # 不再让 playwright 自带的脚本去乱撞包名
+    # 同时使用 libasound2t64 替代过时的 libasound2
+    - name: Fix and Install Playwright System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libasound2t64 || sudo apt-get install -y libasound2
-        sudo apt-get install -y libgbm1
+        sudo apt-get install -y \
+          libasound2t64 \
+          libgbm1 \
+          libnspr4 \
+          libnss3 \
+          libatk1.0-0 \
+          libatk-bridge2.0-0 \
+          libcups2 \
+          libdrm2 \
+          libxkbcommon0 \
+          libxcomposite1 \
+          libxdamage1 \
+          libxext6 \
+          libxfixes3 \
+          librandr2 \
+          libpango-1.0-0 \
+          libcairo2 \
+          libasound2t64
 
+    # 绝杀：去掉 --with-deps 参数，只让它纯粹下载和解压 chromium 浏览器二进制文件
     - name: Install Playwright Browsers
       run: |
-        playwright install chromium --with-deps
+        playwright install chromium
 
     - name: Setup Gost Proxy
       run: |
@@ -55,7 +74,6 @@ jobs:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         PROXY: 127.0.0.1:1080
-        # 额外增加全局代理环境变量，确保 cfbypass 组件在底层请求时也无缝走代理
         HTTP_PROXY: http://127.0.0.1:1080
         HTTPS_PROXY: http://127.0.0.1:1080
       run: |
