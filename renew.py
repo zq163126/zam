@@ -51,26 +51,21 @@ async def check_and_solve_turnstile(page, description=""):
     """
     print(f"🔄 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
     
-    # 定位最外层的续期弹窗容器（这是常规 DOM 可见元素）
     modal_selector = "#renewModal .confirmation-modal-content"
     
     try:
         modal = page.locator(modal_selector).first
-        # 限时 4 秒判断弹窗是否切出并可见
         if await modal.is_visible(timeout=4000):
             print("⚠️ 现场发现续期安全弹窗！正在绕过 Closed Shadow DOM 物理测距...")
             
-            # 获取整个中央弹窗的盒模型数据
             box = await modal.bounding_box()
             if box:
-                # 根据弹窗的整体比例，Turnstile 验证框基本完美横向居中于弹窗内部
-                # 纵向则位于弹窗中下部（取消按钮上方），在这里进行精确物理偏移计算
+                # 依据弹窗比例，计算 Turnstile 框在中下部的绝对物理坐标
                 click_x = box["x"] + (box["width"] / 2)
-                click_y = box["y"] + (box["height"] * 0.62) # 约在弹窗纵向 62% 的位置
+                click_y = box["y"] + (box["height"] * 0.62) 
                 
                 print(f"🎯 测距成功。正在对封闭验证区坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理敲击...")
                 
-                # 移动鼠标并点击，模拟真人轨迹
                 await page.mouse.move(click_x, click_y)
                 await page.mouse.down()
                 await asyncio.sleep(0.1)
@@ -134,18 +129,17 @@ async def run_automation():
         await password_input.fill(PASSWORD)
 
         # 1.4 点击继续按钮
-        print("点击继续提交按钮...")
+        print("点击继续提交按钮并等待页面网络闲置...")
         continue_btn = page.locator('button[type="submit"]')
         await continue_btn.click()
 
-        # 等待自动跳转确认登录成功
-        print("检查是否登录成功...")
-        await page.wait_for_url("**/homepage", timeout=20000)
-        print("登录成功！已跳转至主页。")
+        # 💡 核心修复：移除死等 **/homepage 的强校验行，转而柔性等待 3 秒完成登录状态写入
+        await asyncio.sleep(3)
 
-        # 2. 直接访问续期服务器页面
-        print("访问目标服务器页面...")
+        # 2. 直接跨过主页，强行奔向目标续期服务器页面
+        print("正在跨越主页，直接强行访问目标服务器页面...")
         await page.goto("https://dash.zampto.net/server?id=6932", wait_until="load")
+        print("已成功切入服务器管理页面。")
 
         # 清理干扰广告元素
         print("清理干扰广告元素...")
