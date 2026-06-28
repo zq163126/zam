@@ -45,40 +45,43 @@ def send_telegram_notification(message, screenshot_path=None):
 
 async def check_and_solve_turnstile(page, description=""):
     """
-    针对 Closed Shadow DOM 的高级穿透守卫：
-    由于 CF 验证码藏在 shadowrootmode="closed" 中，常规定位器无法穿透。
-    我们直接利用外部可见的弹窗容器或整体视口定位，进行坐标降维打击。
+    针对 Closed Shadow DOM 以及各种静态、动态拦截框的高级物理穿透守卫：
     """
     print(f"🔄 正在检查是否触发 CF Turnstile 人机验证 ({description})...")
     
-    modal_selector = "#renewModal .confirmation-modal-content"
+    # 扩大探测范围：不仅看续期弹窗，也探测登录页可能出现的独立验证框
+    cf_selectors = [
+        "iframe[src*='challenges.cloudflare.com']",
+        "#turnstileContainer",
+        "#cf-challenge-slot",
+        "#renewModal .confirmation-modal-content"
+    ]
     
     try:
-        modal = page.locator(modal_selector).first
-        if await modal.is_visible(timeout=4000):
-            print("⚠️ 现场发现续期安全弹窗！正在绕过 Closed Shadow DOM 物理测距...")
-            
-            box = await modal.bounding_box()
-            if box:
-                # 依据弹窗比例，计算 Turnstile 框在中下部的绝对物理坐标
-                click_x = box["x"] + (box["width"] / 2)
-                click_y = box["y"] + (box["height"] * 0.62) 
-                
-                print(f"🎯 测距成功。正在对封闭验证区坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理敲击...")
-                
-                await page.mouse.move(click_x, click_y)
-                await page.mouse.down()
-                await asyncio.sleep(0.1)
-                await page.mouse.up()
-                
-                print(f"⏳ 物理敲击信号已发出，留出 6 秒供 Closed 容器内部响应与握手...")
-                await asyncio.sleep(6)
-            else:
-                print("❌ 无法获取弹窗边界盒，跳过物理点击。")
-        else:
-            print("🔍 页面未拉起续期 Modal 弹窗或其处于不可见状态，继续下一步。")
+        for selector in cf_selectors:
+            element = page.locator(selector).first
+            if await element.is_visible(timeout=3000):
+                print(f"⚠️ 现场发现安全拦截/验证元素: {selector}，启动物理测距穿透...")
+                box = await element.bounding_box()
+                if box:
+                    click_x = box["x"] + (box["width"] / 2)
+                    click_y = box["y"] + (box["height"] / 2)
+                    
+                    # 如果是续期弹窗，纵向位置做微调偏移以对准复选框
+                    if "renewModal" in selector:
+                        click_y = box["y"] + (box["height"] * 0.62)
+                        
+                    print(f"🎯 正在向目标中心坐标 [{click_x:.1f}, {click_y:.1f}] 发起物理敲击...")
+                    await page.mouse.move(click_x, click_y)
+                    await page.mouse.down()
+                    await asyncio.sleep(0.1)
+                    await page.mouse.up()
+                    
+                    print("⏳ 物理点击完成，留出 6 秒供验证器后台响应...")
+                    await asyncio.sleep(6)
+                    return
     except Exception as e:
-        print(f"ℹ️ 测距守卫运行期间发生异常或超时跳过: {e}")
+        print(f"ℹ️ 测距守卫异常或跳过: {e}")
 
 
 async def run_automation():
@@ -88,39 +91,61 @@ async def run_automation():
 
     print("正在启动带有 Cloudflare-Bypass 守护的全局浏览器实例...")
     
-    LOGIN_URL = "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl"
+    # 将初始探路域名改为主面板，降低在一开始被 auth 域名拦截的概率
+    MAIN_DASH_URL = "https://dash.zampto.net"
     solver = CF_Solver(
-        domain=LOGIN_URL,
+        domain=MAIN_DASH_URL,
         headless=True,
         slow_mo=150,
         poll_interval=1.0,
-        max_wait=45.0,
+        max_wait=30.0,
     )
 
     page = None
     try:
-        print("正在调用 cfbypass 建立浏览器环境并加载登录页面...")
+        print("正在调用 cfbypass 建立浏览器环境...")
         try:
             await solver.bypass()
         except Exception as bypass_err:
-            print(f"💡 提示: 初始 cfbypass 探测结束: {bypass_err}")
+            print(f"💡 提示: 初始探测结束（忽略 Headless 警告，强行接管页面）: {bypass_err}")
         
         page = solver.page
         if not page:
             raise Exception("未能成功通过 solver 获取到 Playwright 页面实例。")
 
-        print("浏览器就绪。")
+        # 强行重定向到登录页面
+        print("正在强制导航至登录网关...")
+        await page.goto(
+            "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl",
+            wait_until="domcontentloaded"
+        )
+        await asyncio.sleep(3)
+
+        # 🔗 核心加固：进入登录页后，立即扫射一次看有没有开门红的 CF 验证码，有就物理破开
+        await check_and_solve_turnstile(page, "刚进入登录页")
 
         # 1.1 输入 EMAIL
         print("输入 Email...")
         email_input = page.locator('input[name="identifier"]')
-        await email_input.wait_for(state="visible", timeout=15000)
+        try:
+            await email_input.wait_for(state="visible", timeout=15000)
+        except Exception as e:
+            # 如果依然找不到，说明可能被封锁在验证页，再实施一次紧急盲点敲击
+            print("🚨 登录输入框未显现，尝试进行全屏中央紧急物理破壳...")
+            await page.mouse.click(400, 300) # 尝试点击屏幕靠中心偏左位置
+            await asyncio.sleep(4)
+            await email_input.wait_for(state="visible", timeout=10000)
+
         await email_input.fill(EMAIL)
 
         # 1.2 点击登录提交按钮
         print("点击登录提交按钮...")
         login_btn = page.locator('button[type="submit"]')
         await login_btn.click()
+        await asyncio.sleep(2)
+        
+        # 🔗 动作后检查
+        await check_and_solve_turnstile(page, "提交 Email 后")
 
         # 1.3 输入密码
         print("等待密码页面加载并输入密码...")
@@ -129,12 +154,12 @@ async def run_automation():
         await password_input.fill(PASSWORD)
 
         # 1.4 点击继续按钮
-        print("点击继续提交按钮并等待页面网络闲置...")
+        print("点击继续提交按钮...")
         continue_btn = page.locator('button[type="submit"]')
         await continue_btn.click()
 
-        # 💡 核心修复：移除死等 **/homepage 的强校验行，转而柔性等待 3 秒完成登录状态写入
-        await asyncio.sleep(3)
+        # 柔性等待登录状态写入
+        await asyncio.sleep(4)
 
         # 2. 直接跨过主页，强行奔向目标续期服务器页面
         print("正在跨越主页，直接强行访问目标服务器页面...")
