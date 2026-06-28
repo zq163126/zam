@@ -1,9 +1,9 @@
 name: Zampto Auto Renew
 
 on:
-  schedule:
+ # schedule:
     # 每天北京时间早上 9 点和晚上 9 点各自动执行一次
-    - cron: '0 1,13 * * *'
+ #   - cron: '0 1,13 * * *'
   workflow_dispatch: # 允许手动触发
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
     - name: 安装系统依赖 (Linux 虚拟显示与 Chrome 必备组件)
       run: |
         sudo apt-get update
-        sudo apt-get install -y x11-utils libxss1 libappindicator1 libgtk-3-0 xvfb
+        sudo apt-get install -y x11-utils libxss1 libayatana-appindicator3-1 libgtk-3-0 xvfb
 
     - name: 安装 Python 依赖库
       run: |
