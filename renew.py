@@ -123,7 +123,7 @@ async def run_automation():
             await email_input.wait_for(state="visible", timeout=15000)
             await email_input.fill(EMAIL)
 
-            # 1.2 点击登录按钮（移除中文字符过滤，纯属性精确定位）
+            # 1.2 点击登录按钮
             print("点击登录提交按钮...")
             login_btn = page.locator('button[type="submit"]')
             await login_btn.click()
@@ -134,7 +134,7 @@ async def run_automation():
             await password_input.wait_for(state="visible", timeout=15000)
             await password_input.fill(PASSWORD)
 
-            # 1.4 点击继续（移除中文字符过滤，纯属性精确定位）
+            # 1.4 点击继续
             print("点击继续提交按钮...")
             continue_btn = page.locator('button[type="submit"]')
             await continue_btn.click()
@@ -148,6 +148,39 @@ async def run_automation():
             print("访问目标服务器页面...")
             await page.goto("https://dash.zampto.net/server?id=6932", wait_until="load")
 
+            # ----------------- 🌟 新增：注入强力去广告 JS 脚本 🌟 -----------------
+            print("正在强行清理页面广告和弹窗遮挡物...")
+            await page.evaluate("""
+                () => {
+                    // 1. 定义常见的广告和遮挡元素选择器（针对谷歌广告、iframe、特定横幅和遮罩层）
+                    const selectors = [
+                        'ins.adsbygoogle', 
+                        'iframe[id*="google"]', 
+                        'div[id*="google"]', 
+                        '.ads-container', 
+                        '#ad-slot', 
+                        '.modal-backdrop', 
+                        'iframe[src*="googleads"]'
+                    ];
+                    
+                    // 2. 循环移除这些多余的节点
+                    selectors.forEach(selector => {
+                        document.querySelectorAll(selector).forEach(el => el.remove());
+                    });
+                    
+                    // 3. 针对 Zampto 仪表盘页面可能存在的局部浮动通知或遮罩，直接隐藏以防遮挡主体
+                    document.querySelectorAll('div').forEach(el => {
+                        const style = window.getComputedStyle(el);
+                        // 如果元素是固定定位或绝对定位，且层级过高，或者包含了“ad”关键字，将其隐蔽
+                        if (style.position === 'fixed' && (parseInt(style.zIndex) > 1000 || el.innerText.includes('Ad'))) {
+                            el.remove();
+                        }
+                    });
+                }
+            """)
+            await asyncio.sleep(1) # 稍等片刻让 DOM 渲染生效
+            # ------------------------------------------------------------------
+
             # 鲁棒性定位 Renew 元素链接
             renew_link = page.locator('a[onclick*="handleServerRenewal"]')
             await renew_link.wait_for(state="visible", timeout=15000)
@@ -158,6 +191,14 @@ async def run_automation():
             # 3. 稍作等待让续期操作在后台完成
             print("已触发 Renew，等待 8 秒确认结果...")
             await asyncio.sleep(8)
+
+            # 在最终截图前，再次执行一次清理，防止续期成功后弹出新的广告或弹窗
+            try:
+                await page.evaluate("""() => {
+                    document.querySelectorAll('ins.adsbygoogle, iframe[id*="google"]').forEach(el => el.remove());
+                }""")
+            except:
+                pass
 
             # 4. 截图并发送通知
             print("正在截取操作结果图...")
