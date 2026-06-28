@@ -23,32 +23,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 核心修复：手动安装无头浏览器所需的全部底层依赖（避开包名过时的旧依赖）
-    # 不再让 playwright 自带的脚本去乱撞包名
-    # 同时使用 libasound2t64 替代过时的 libasound2
-    - name: Fix and Install Playwright System Dependencies
+    # 核心修复：使用官方推荐的独立依赖安装命令，让 Playwright 自己去适配最新系统，不再报 100 错误
+    - name: Install Playwright System Dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libasound2t64 \
-          libgbm1 \
-          libnspr4 \
-          libnss3 \
-          libatk1.0-0 \
-          libatk-bridge2.0-0 \
-          libcups2 \
-          libdrm2 \
-          libxkbcommon0 \
-          libxcomposite1 \
-          libxdamage1 \
-          libxext6 \
-          libxfixes3 \
-          librandr2 \
-          libpango-1.0-0 \
-          libcairo2 \
-          libasound2t64
+        playwright install-deps chromium
 
-    # 绝杀：去掉 --with-deps 参数，只让它纯粹下载和解压 chromium 浏览器二进制文件
+    # 纯粹下载和解压 chromium 浏览器二进制文件
     - name: Install Playwright Browsers
       run: |
         playwright install chromium
