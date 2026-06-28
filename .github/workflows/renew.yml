@@ -27,11 +27,26 @@ jobs:
       run: |
         playwright install chromium --with-deps
 
+    - name: Setup Gost Proxy
+      run: |
+          # 👇👇👇 正在启动gost代理 👇👇👇                
+          wget -q https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
+          gunzip -f gost-linux-amd64-2.11.5.gz
+          chmod +x gost-linux-amd64-2.11.5
+          
+          echo "🔗 启动 Gost 隧道: $SOCKS5_URL"
+          ./gost-linux-amd64-2.11.5 -L=http://:1080 -F="${{ secrets.SOCKS5_URL }}" > gost.log 2>&1 &
+          
+          sleep 5
+          echo "--- 🌐 连通性测试 ---"
+          curl -I -x http://127.0.0.1:1080 https://www.google.com
+
     - name: Run Renewal Script
       env:
         ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
         ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        PROXY: 127.0.0.1:1080
       run: |
         python renew.py
